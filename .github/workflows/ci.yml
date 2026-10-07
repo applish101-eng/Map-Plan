@@ -1,0 +1,235 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same branch: CI results nobody is waiting for
+# are how a red build gets ignored.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Non-secret defaults. DATABASE_URL points at the throwaway container below;
+  # nothing in CI may reach a real database or a real object store.
+  POSTGRES_PORT: '5433'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Fast feedback first: lint and typecheck need no services and finish in
+  # seconds, so they fail before the slow jobs burn minutes.
+  # ---------------------------------------------------------------------------
+  static:
+    name: Lint and typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # Risk R9: the brand colours fail WCAG for text on light backgrounds
+      # (#58CAE7 = 1.9:1, #FFD500 = 1.4:1). That is a design decision, but it is
+      # only safe while nothing uses them AS text. This check fails the build if
+      # a class starts doing so.
+      - name: Brand token contrast (spec 12.2, risk R9)
+        run: node scripts/check-token-contrast.mjs
+
+  # ---------------------------------------------------------------------------
+  # Unit and acceptance tests
+  # ---------------------------------------------------------------------------
+  test:
+    name: Unit and acceptance tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Test
+        run: pnpm test
+
+  # ---------------------------------------------------------------------------
+  # Database: real PostGIS, real migrations, real triggers.
+  #
+  # The audit trigger and the spatial views cannot be meaningfully tested
+  # without a live PostGIS - the whole point of both is that they execute
+  # inside the database. SQLite or a mocked driver would test nothing.
+  # ---------------------------------------------------------------------------
+  database:
+    name: Migrations and schema verification
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_DB: nepal_flood_gis
+          POSTGRES_USER: migrator
+          POSTGRES_PASSWORD: nepal_dev_pw
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U migrator -d nepal_flood_gis"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply migrations
+        env:
+          DATABASE_MIGRATOR_URL: postgresql://migrator:nepal_dev_pw@localhost:5433/nepal_flood_gis
+        run: pnpm migrate
+
+      # The 15 structural checks: extensions, schemas, audit triggers, audit
+      # immutability, role restrictions, spatial index validity, read models,
+      # seeded lookups, single primary org, no fabricated boundaries, no leaked
+      # demo data, access_rank ordering, VALID-only totals.
+      - name: Verify schema
+        env:
+          DATABASE_MIGRATOR_URL: postgresql://migrator:nepal_dev_pw@localhost:5433/nepal_flood_gis
+        run: |
+          docker run --rm \
+            --network host \
+            -v "$PWD/packages/db/scripts/verify_migration.sql:/verify.sql:ro" \
+            -e PGPASSWORD=nepal_dev_pw \
+            postgres:16-alpine \
+            psql -h localhost -p 5433 -U migrator -d nepal_flood_gis -f /verify.sql
+
+      - name: Migration runner is idempotent
+        env:
+          DATABASE_MIGRATOR_URL: postgresql://migrator:nepal_dev_pw@localhost:5433/nepal_flood_gis
+        run: |
+          # A second `pnpm migrate` must be a no-op. If it is not, something
+          # re-applies or re-records migrations, which corrupts the checksum
+          # guarantee that makes applied migrations immutable.
+          pnpm migrate
+          pnpm migrate:status
+
+  # ---------------------------------------------------------------------------
+  # End-to-end: the shell renders, tokens apply, and no third party is called.
+  #
+  # The "no third-party requests" spec is the one that cannot be faked. If a font
+  # CDN or a public tile server creeps in, the app still looks correct on a
+  # connected machine and only fails in the field.
+  # ---------------------------------------------------------------------------
+  e2e:
+    name: End-to-end (shell)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+
+      # Playwright's webServer config starts `pnpm dev` itself and waits for it.
+      # Phase 0's shell needs no database, so no service container here.
+      - name: Run e2e
+        run: pnpm exec playwright test
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Build, plus the local-first guard.
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      # Spec 3 and 9.3: local-first is a promise to users in the field, so it
+      # is checked mechanically rather than trusted. A public OSM tile URL
+      # anywhere in the shipped output means the promise is broken.
+      - name: Assert no public OSM tile server in build output
+        run: |
+          if grep -rEn 'tile\.openstreetmap\.org|tile\.osm\.org' apps/web/.next/ ; then
+            echo "::error::Build output references the public OSM tile server (spec 9.3)."
+            exit 1
+          fi
+          echo "No public tile server references in build output."
+
+      - name: Assert no secrets in build output
+        run: |
+          if grep -rEn 'dev-only-change-me|minioadmin' apps/web/.next/ ; then
+            echo "::error::A development secret reached the build output."
+            exit 1
+          fi
+          echo "No development secrets in build output."

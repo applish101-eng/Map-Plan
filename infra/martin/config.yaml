@@ -1,0 +1,120 @@
+# Martin tile server configuration (Martin 0.8 YAML format).
+#
+# Phase 0/1: not running. Dynamic data is served as server-filtered GeoJSON
+# (spec AD-4); vector tiles for the large layers arrive in V2/Phase 6. The
+# service is behind a compose profile for that reason:
+#
+#   pnpm db:tiles        # starts Postgres + Martin
+#
+# Intentionally NOT auto-started by `pnpm db:up`. With `layers: []` Martin exits
+# rather than starting, so leaving it enabled produced a restart loop in the
+# dev output and taught people to ignore real errors from it.
+#
+# Access: tiles_ro only. That role is NOINHERIT, owns nothing, and cannot see
+# audit.audit_log or app.users (spec 16.2).
+
+# The database connection is given per-source, not globally. Naming the role
+# explicitly here is what stops Martin from connecting as the migration owner.
+sources:
+  affected-population:
+    type: postgis
+    connection: postgresql://tiles_ro:nepal_dev_pw@postgres:5432/nepal_flood_gis
+    # Read models from spec 8.5, not base tables. Consuming the view means the
+    # tile layer and the API agree on VERIFIED-only totals by construction -
+    # Martin cannot be handed a different aggregation than the dashboard.
+    table: ops.v_ward_summary
+    geometry_column: geom
+    geometry_type: GEOMETRY
+    srid: 4326
+    minzoom: 6
+    maxzoom: 14
+    # Simplification is a tile-size lever, not a display choice. At zoom 6 a
+    # ward outline does not need 200 vertices, and the payload budget is 2 MB
+    # at zoom 9 (spec 18.1).
+    simplify: true
+    simplify_extent: 4096
+    simplify_tolerance: 0.01
+    vector_layers:
+      - id: affected-population
+        description: Affected population by ward
+        fields:
+          ward_name: ward_name
+          ward_number: ward_number
+          affected_people: affected_people
+          affected_households: affected_households
+          severity: severity
+          verification_status: verification_status
+          is_verified: is_verified
+          plan_activities: plan_activities
+          blocked_segments: blocked_segments
+          is_demo: is_demo
+          last_updated: last_updated
+    # Bounded so a malformed filter cannot exhaust the box. Unbounded tile
+    # filters are a cheap denial-of-service.
+    filters:
+      verification_status:
+        type: string
+        description: Restrict to one verification status
+        default: VALID
+      include_unverified:
+        type: bool
+        description: Widen to include NEW and REVIEW records
+        default: false
+      is_demo:
+        type: bool
+        description: Include demo records
+        default: true
+
+  roads:
+    type: postgis
+    connection: postgresql://tiles_ro:nepal_dev_pw@postgres:5432/nepal_flood_gis
+    table: ops.v_road_segments_current
+    geometry_column: geom
+    geometry_type: LINESTRING
+    srid: 4326
+    minzoom: 8
+    maxzoom: 16
+    simplify: false
+    vector_layers:
+      - id: roads
+        description: Road access status
+        fields:
+          road_name: road_name
+          # access_status drives BOTH colour and dash pattern. The dash pattern is
+          # what makes six states readable in greyscale print and for colour-
+          # vision deficiency (spec 12.3) - colour alone is not sufficient.
+          access_status: access_status
+          access_rank: access_rank
+          reason: reason
+          last_verified: last_verified
+          recently_changed: recently_changed
+          is_demo: is_demo
+
+  # Populated in Phase 2, once ops.locations has data.
+  # locations:
+  #   type: postgis
+  #   connection: postgresql://tiles_ro:nepal_dev_pw@postgres:5432/nepal_flood_gis
+  #   table: ops.v_affected_locations
+  #   geometry_column: geom
+  #   geometry_type: GEOMETRY
+  #   srid: 4326
+  #   minzoom: 9
+  #   maxzoom: 16
+  #   vector_layers:
+  #     - id: locations
+  #       fields:
+  #         name: name
+  #         location_type: location_type
+  #         affected_people: affected_people
+  #         verification_status: verification_status
+  #         is_demo: is_demo
+
+server:
+  listen_addresses: 0.0.0.0
+  base_url: /
+  # Bound Martin's memory and work so one large query cannot take the box down
+  # during a wide pan.
+  cache_size_mb: 256
+  cache_item_limit: 100_000
+  allow_dump: false
+  enable_cors: true

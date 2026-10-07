@@ -1,0 +1,31 @@
+node_modules/
+.pnpm-store/
+.next/
+.next-dev/
+out/
+dist/
+build/
+coverage/
+playwright-report/
+test-results/
+
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Downloaded and derived source datasets - never committed (see docs/DATA_SOURCES.md)
+data/raw/**
+data/processed/**
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Generated basemap tiles
+infra/tiles/*.pmtiles
+
+*.log
+*.tsbuildinfo
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json

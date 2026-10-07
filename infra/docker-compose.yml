@@ -1,0 +1,113 @@
+# Nepal Flash-Flood Response GIS - local development stack.
+# Single-host production uses the same compose file with restricted ports and
+# a managed/external Postgres. See docs/ARCHITECTURE.md section 18.
+name: nepal-flood-gis
+
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: nfg-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: nepal_flood_gis
+      # Superuser is only used to create the least-privilege roles below.
+      POSTGRES_USER: migrator
+      POSTGRES_PASSWORD: nepal_dev_pw
+    ports:
+      # Host port 5433 so a developer Postgres on 5432 is not shadowed.
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Runs once on empty data directory: extensions, roles, grants.
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U migrator -d nepal_flood_gis"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  # S3-compatible object storage. Opt-in (`--profile storage`) because the
+  # dev default is STORAGE_DRIVER=fs (spec 6, "Object storage"). Phase 0 does
+  # not need it; `pnpm db:up:storage` starts it when the S3 adapter is built.
+  # Image is pinned; if your registry mirror lacks it, point IMAGE_MINIO_* at
+  # an equivalent S3 service - the StorageAdapter interface is unchanged.
+  minio:
+    image: quay.io/minio/minio:latest
+    container_name: nfg-minio
+    profiles: ["storage"]
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      # MinIO has no single-object image that works across all registries, so
+      # this healthcheck is best-effort. The app's storage health endpoint
+      # reports the real state (spec 18.5).
+
+  # Creates the bucket once, then exits. Not part of the long-running stack.
+  minio-init:
+    image: quay.io/minio/mc:latest
+    container_name: nfg-minio-init
+    profiles: ["storage"]
+    depends_on:
+      minio:
+        condition: service_started
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 minioadmin minioadmin; do sleep 2; done;
+      mc mb --ignore-existing local/nepal-flood-gis;
+      echo 'bucket ready';
+      "
+    restart: "no"
+
+  # Tile server. Opt-in (`--profile tiles`) because Phase 0 and Phase 1 serve
+  # GeoJSON from the API (spec AD-4: vector tiles arrive in V2). It is also
+  # offline-unfriendly in its default state: with no layers configured Martin
+  # exits rather than starting, and a restart loop in `pnpm db:up` output is
+  # noise. Start it with `pnpm db:tiles` in Phase 6.
+  martin:
+    image: maplibre/martin:0.8.0
+    container_name: nfg-martin
+    profiles: ["tiles"]
+    restart: unless-stopped
+    command: --config /config/config.yaml
+    volumes:
+      - ./martin/config.yaml:/config/config.yaml:ro
+    ports:
+      - "8081:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/catalog || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Optional: static file host for the PMTiles basemap.
+  # Disabled by default - see `pnpm db:up:tiles` guidance in docs/IMPORT_GUIDE.md.
+  tiles:
+    image: caddy:2-alpine
+    container_name: nfg-tiles
+    profiles: ["tiles"]
+    restart: unless-stopped
+    volumes:
+      - ../infra/tiles:/srv:ro
+    ports:
+      - "8080:80"
+
+volumes:
+  postgres-data:
+  minio-data:

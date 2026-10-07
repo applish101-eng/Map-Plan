@@ -1,0 +1,40 @@
+{
+  "name": "nepal-flood-gis",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@11.8.0",
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @nepal-flood-gis/web dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:up": "docker compose -f infra/docker-compose.yml up -d",
+    "db:up:storage": "docker compose -f infra/docker-compose.yml --profile storage up -d",
+    "db:tiles": "docker compose -f infra/docker-compose.yml --profile tiles up -d",
+    "db:down": "docker compose -f infra/docker-compose.yml down",
+    "db:logs": "docker compose -f infra/docker-compose.yml logs -f postgres",
+    "migrate": "node packages/db/scripts/migrate.mjs up",
+    "migrate:status": "node packages/db/scripts/migrate.mjs status",
+    "migrate:down": "node packages/db/scripts/migrate.mjs down",
+    "e2e": "playwright test",
+    "e2e:install": "playwright install --with-deps chromium",
+    "test:tokens": "node scripts/check-token-contrast.mjs",
+    "db:verify": "docker exec -i nfg-postgres psql -U migrator -d nepal_flood_gis -f - < packages/db/scripts/verify_migration.sql"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.49.1",
+    "@types/node": "^22.10.5",
+    "eslint": "^9.18.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.13.0",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.71.1",
+    "vitest": "^2.1.8"
+  }
+}

@@ -1,0 +1,21 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# pnpm 11 build-script policy.
+#
+# Only dependencies whose install scripts are required to function are allowed.
+# Everything else is blocked by default, and pnpm aborts rather than warning
+# when a script is neither approved nor explicitly denied.
+#
+#   esbuild              - vite/vitest cannot run without its native binary
+#   @tailwindcss/oxide   - Tailwind's native binary
+#   sharp                - transitive via Next.js image optimisation; ships
+#                          prebuilt per-platform binaries and its install script
+#                          is a no-op when one matches. Phase 0 does no image
+#                          processing, so it is explicitly denied rather than
+#                          approved. Flip to true if a later phase needs it.
+allowBuilds:
+  esbuild: true
+  '@tailwindcss/oxide': true
+  sharp: false

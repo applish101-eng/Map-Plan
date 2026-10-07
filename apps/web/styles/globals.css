@@ -1,0 +1,136 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* tokens.css declares the custom properties; @layer base maps them onto
+   Tailwind's own background/text/border defaults so a reset element picks up
+   the palette without every component restating it. */
+@layer base {
+  :root {
+    color-scheme: light dark;
+  }
+
+  html,
+  body {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-surface-100 text-ink-900 font-sans antialiased;
+    font-size: var(--text-base);
+  }
+
+  /* Visible focus for keyboard users, using the sanctioned cyan halo from
+     spec 12.1. Never removed, only restyled. */
+  :focus-visible {
+    outline: 2px solid var(--brand-blue);
+    outline-offset: 2px;
+  }
+
+  /* Nepali place names (name_ne) must render in Devanagari, not fall back to a
+     font that will substitute Devanagari incorrectly. */
+  :lang(ne),
+  [lang='ne'] {
+    font-family: var(--font-devanagari);
+  }
+
+  /* Tabular figures: the profile panel lines up counts, units and dates in
+     columns, which proportional digits make unreadable. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum';
+  }
+
+  /* Map container. The map is dominant at every breakpoint (principle 1):
+     it fills available space and chrome overlays it rather than shrinking it. */
+  .map-container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+  }
+
+  /* MapLibre renders its own controls; suppress the default attribution box in
+     favour of the app's own, which also carries the DEMO DATA banner. */
+  .maplibregl-ctrl-attrib {
+    display: none;
+  }
+}
+
+@layer components {
+  .panel-surface {
+    @apply bg-surface-0 border border-line shadow-panel;
+    border-radius: var(--radius-corner);
+  }
+
+  .metric-value {
+    @apply text-metric-lg tabular text-ink-900;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-corner text-xs;
+    border: 1px solid var(--line-300);
+  }
+
+  /* DEMO DATA badge. Grey by design: it must read as a label, never as a data
+     category, and it must not borrow a colour that means something else
+     (spec 12.1, 19.4). */
+  .demo-badge {
+    @apply chip text-status-demo font-semibold uppercase tracking-wide;
+    border-color: var(--status-demo);
+  }
+}
+
+@layer utilities {
+  /* Visually hidden but available to screen readers. Used for the ARIA live
+     region that announces map selection (spec 13.9). */
+  .sr-only-focusable:not(:focus):not(:focus-within) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+  }
+}
+
+/* ==========================================================================
+   Print (spec 13.8)
+
+   The printable map needs: title, date, legend, scale bar, north arrow,
+   sources, data freshness and disclaimer. The app renders those elements and
+   hides the interactive chrome here, then calls window.print().
+   ========================================================================== */
+@media print {
+  @page {
+    size: A3 landscape;
+    margin: 12mm;
+  }
+
+  body {
+    background: white;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  .panel-surface {
+    box-shadow: none;
+    border: 1px solid #999;
+  }
+
+  /* Colours must survive the printer. Adjusted colours are ignored by some
+     print paths, so the affected ramp is forced with print-color-adjust. */
+  .print-preserve-colour {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+}
